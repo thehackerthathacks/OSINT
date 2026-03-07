@@ -227,13 +227,13 @@ All-in-one OSINT orchestration tools.
 
 ### Script exits silently after "Base Dependencies"
 
-Caused by `set -e` killing the script when any command returns non-zero. Check what actually failed:
+The script uses `set -uo pipefail` (not `set -e`), so individual failures won't kill the whole run. If a category section header is missing from output, a function likely hit an unbound variable or a hard exit. Check the log:
 
 ```bash
-cat /var/log/osint_installer_*.log | tail -30
+cat /var/log/osint_installer_*.log | tail -50
 ```
 
-To skip apt and only install GitHub/pip tools:
+To skip apt entirely and only install GitHub/pip tools:
 
 ```bash
 sudo bash osint_installer.sh --skip-apt
@@ -243,37 +243,11 @@ sudo bash osint_installer.sh --skip-apt
 
 ### `error: externally-managed-environment` (PEP 668)
 
-Kali's Python 3.13 blocks system-wide `pip install` by default. You'll see this error if the script tries to install pip packages outside a venv.
+Kali's Python 3.13 blocks system-wide `pip install` by default. **The script already handles this** — all pip installs outside a venv automatically pass `--break-system-packages`, and GitHub-cloned tools with a `requirements.txt` get their own isolated venv under `/opt/osint/venvs/`.
 
-**Fix 1 — patch the script in place:**
+You should not see this error. If you do, you're running an older version of the script — download the latest and re-run.
 
-```bash
-sudo sed -i \
-  's/pip3 install --quiet --upgrade pip setuptools wheel/pip3 install --quiet --upgrade pip setuptools wheel --break-system-packages/' \
-  osint_installer.sh
-```
-
-Then in the `pip_install` function, add `--break-system-packages` to the pip call for installs that run outside a venv (i.e. when no `$venv` argument is passed).
-
-**Fix 2 — use pipx for standalone tools (cleaner):**
-
-```bash
-sudo apt install pipx -y
-pipx install holehe
-pipx install maigret
-pipx install h8mail
-# etc.
-```
-
-`pipx` automatically manages a venv per tool and adds launchers to `~/.local/bin`.
-
-**Fix 3 — force it (fine on a dedicated Kali box):**
-
-```bash
-pip3 install <package> --break-system-packages
-```
-
-This won't break anything if this machine is solely for OSINT work and you're not using the system Python for anything else.
+> **Note:** `--break-system-packages` is safe on a dedicated Kali OSINT machine. It only bypasses the PEP 668 guard — it does not actually break anything unless you rely on the system Python for unrelated work.
 
 ---
 
