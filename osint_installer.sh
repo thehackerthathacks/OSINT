@@ -5,7 +5,7 @@
 #  Usage: sudo bash osint_installer.sh [--category <cat>] [--dry-run] [--skip-apt]
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -108,7 +108,13 @@ apt_install() {
 pip_install() {
     local pkg="$1" name="${2:-$1}" venv="${3:-}"
     local pip_bin="pip3"
-    [[ -n "$venv" && -d "${VENV_BASE}/${venv}/bin" ]] && pip_bin="${VENV_BASE}/${venv}/bin/pip"
+    local extra_flags=""
+
+    if [[ -n "$venv" && -d "${VENV_BASE}/${venv}/bin" ]]; then
+        pip_bin="${VENV_BASE}/${venv}/bin/pip"
+    else
+        extra_flags="--break-system-packages"
+    fi
 
     if $DRY_RUN; then record "$name" ok; return; fi
 
@@ -116,7 +122,7 @@ pip_install() {
         record "$name" skip
     else
         info "pip: installing $name..."
-        run_cmd "$pip_bin install --quiet $pkg" \
+        run_cmd "$pip_bin install --quiet $extra_flags $pkg" \
             && record "$name" ok || record "$name" fail
     fi
 }
@@ -213,8 +219,10 @@ install_base_deps() {
     local deps=(python3 python3-pip python3-venv python3-dev git curl wget \
                 libssl-dev libffi-dev build-essential libxml2-dev libxslt1-dev \
                 zlib1g-dev libjpeg-dev jq tor proxychains4 golang-go ruby ruby-dev)
-    run_cmd "DEBIAN_FRONTEND=noninteractive apt-get install -y ${deps[*]}"
-    run_cmd "pip3 install --quiet --upgrade pip setuptools wheel"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${deps[@]}" >> "$LOG_FILE" 2>&1 \
+        || warn "Some base deps failed — continuing anyway (check $LOG_FILE)"
+    pip3 install --quiet --upgrade pip setuptools wheel --break-system-packages >> "$LOG_FILE" 2>&1 \
+        || warn "pip upgrade failed — continuing anyway"
 }
 
 # =============================================================================
