@@ -369,20 +369,18 @@ install_phone() {
     [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "phone" ]] && return
     header "Phone Number OSINT"
 
-    apt_install "phoneinfoga"  "PhoneInfoga"
-
     pip_install "ignorant"  "Ignorant"
-
-    github_clone phone "PhoneInfoga" \
-        "https://github.com/sundowndev/PhoneInfoga" \
-        "requirements.txt"
-
-    github_clone phone "Moriarty-Project" \
-        "https://github.com/AzizKpln/Moriarty-Project" \
-        "requirements.txt"
 
     github_clone phone "X-osint" \
         "https://github.com/TermuxHackz/X-osint" \
+        "requirements.txt"
+
+    github_clone phone "PhoneIntel" \
+        "https://github.com/phoneintel/phoneintel" \
+        "requirements.txt"
+
+    github_clone phone "Telespot" \
+        "https://github.com/thumpersecure/Telespot" \
         "requirements.txt"
 
     github_clone phone "PhoneNumber-OSINT" \
@@ -393,8 +391,8 @@ install_phone() {
         "https://github.com/kalmux1/PhoneOsint" \
         "requirements.txt"
 
-    github_clone phone "Telespot" \
-        "https://github.com/thumpersecure/Telespot" \
+    github_clone phone "Moriarty-Project" \
+        "https://github.com/AzizKpln/Moriarty-Project" \
         "requirements.txt"
 }
 
