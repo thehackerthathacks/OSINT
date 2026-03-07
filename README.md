@@ -223,6 +223,102 @@ All-in-one OSINT orchestration tools.
 
 ---
 
+## Troubleshooting
+
+### Script exits silently after "Base Dependencies"
+
+Caused by `set -e` killing the script when any command returns non-zero. Check what actually failed:
+
+```bash
+cat /var/log/osint_installer_*.log | tail -30
+```
+
+To skip apt and only install GitHub/pip tools:
+
+```bash
+sudo bash osint_installer.sh --skip-apt
+```
+
+---
+
+### `error: externally-managed-environment` (PEP 668)
+
+Kali's Python 3.13 blocks system-wide `pip install` by default. You'll see this error if the script tries to install pip packages outside a venv.
+
+**Fix 1 — patch the script in place:**
+
+```bash
+sudo sed -i \
+  's/pip3 install --quiet --upgrade pip setuptools wheel/pip3 install --quiet --upgrade pip setuptools wheel --break-system-packages/' \
+  osint_installer.sh
+```
+
+Then in the `pip_install` function, add `--break-system-packages` to the pip call for installs that run outside a venv (i.e. when no `$venv` argument is passed).
+
+**Fix 2 — use pipx for standalone tools (cleaner):**
+
+```bash
+sudo apt install pipx -y
+pipx install holehe
+pipx install maigret
+pipx install h8mail
+# etc.
+```
+
+`pipx` automatically manages a venv per tool and adds launchers to `~/.local/bin`.
+
+**Fix 3 — force it (fine on a dedicated Kali box):**
+
+```bash
+pip3 install <package> --break-system-packages
+```
+
+This won't break anything if this machine is solely for OSINT work and you're not using the system Python for anything else.
+
+---
+
+### Go tools fail to build (`Mosint`, `PhoneInfoga`, `Ipinfo`)
+
+Make sure `golang-go` is installed and `$GOPATH` is set:
+
+```bash
+sudo apt install golang-go -y
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOPATH/bin
+```
+
+Then re-run with `--category email` or `--category phone` to retry just that category.
+
+---
+
+### Rust tools fail to build (`Sn0int`)
+
+Install the Rust toolchain via rustup (the `rustc` from apt is often too old):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+Then manually build:
+
+```bash
+cd /opt/osint/people/Sn0int
+cargo build --release
+```
+
+---
+
+### A specific tool failed but everything else installed fine
+
+The script records per-tool results and won't abort on individual failures. Check the summary printed at the end, then look up the specific error in the log:
+
+```bash
+grep -A5 "tool-name" /var/log/osint_installer_*.log
+```
+
+---
+
 ## Legal
 
 These tools are for **authorized security research, OSINT investigations, and CTF challenges only**. Using them against systems or individuals without explicit permission is illegal. You are responsible for how you use this.
