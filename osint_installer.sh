@@ -373,29 +373,28 @@ install_phone() {
 
     pip_install "ignorant"  "Ignorant"
 
-    github_clone phone "PhoneInfoga-Extended" \
-        "https://github.com/sundowndev/phoneinfoga" \
-        "" \
-        "go build -o phoneinfoga . 2>/dev/null || true"
-
-    github_clone phone "OSINT-Phone" \
-        "https://github.com/HunxByts/OsintPhoneNumber" \
+    github_clone phone "PhoneInfoga" \
+        "https://github.com/sundowndev/PhoneInfoga" \
         "requirements.txt"
 
-    github_clone phone "Callerspy" \
-        "https://github.com/PopeyedPete/CallerSpy" \
+    github_clone phone "Moriarty-Project" \
+        "https://github.com/AzizKpln/Moriarty-Project" \
         "requirements.txt"
 
-    github_clone phone "Moriarty-Phone" \
-        "https://github.com/iamraphson/moriarty-phone" \
+    github_clone phone "X-osint" \
+        "https://github.com/TermuxHackz/X-osint" \
         "requirements.txt"
 
-    github_clone phone "Numspy" \
-        "https://github.com/ibnaleem/numspy" \
+    github_clone phone "PhoneNumber-OSINT" \
+        "https://github.com/spider863644/PhoneNumber-OSINT" \
         "requirements.txt"
 
-    github_clone phone "TelSearch" \
-        "https://github.com/mishakorzik/TelSearch" \
+    github_clone phone "PhoneOsint" \
+        "https://github.com/kalmux1/PhoneOsint" \
+        "requirements.txt"
+
+    github_clone phone "Telespot" \
+        "https://github.com/thumpersecure/Telespot" \
         "requirements.txt"
 }
 
