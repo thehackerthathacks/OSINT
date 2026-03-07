@@ -1,163 +1,664 @@
 #!/usr/bin/env bash
+# =============================================================================
+#  OSINT Tools Installer for Kali Linux
+#  Focus: People OSINT > Web Recon
+#  Usage: sudo bash osint_installer.sh [--category <cat>] [--dry-run] [--skip-apt]
+# =============================================================================
+
 set -euo pipefail
 
-MODE="${1:-full}"
-USE_VENV=false
-for arg in "$@"; do
-  if [ "$arg" = "--venv" ] || [ "$arg" = "-v" ]; then
-    USE_VENV=true
-  fi
+# ── Colours ──────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+INSTALL_BASE="/opt/osint"
+LOG_FILE="/var/log/osint_installer_$(date +%Y%m%d_%H%M%S).log"
+VENV_BASE="${INSTALL_BASE}/venvs"
+DRY_RUN=false
+SKIP_APT=false
+FILTER_CATEGORY=""
+declare -A RESULTS   # tool_name -> "ok" | "fail" | "skip"
+TOTAL=0; OK=0; FAIL=0; SKIP=0
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)    DRY_RUN=true ;;
+        --skip-apt)   SKIP_APT=true ;;
+        --category)   FILTER_CATEGORY="${2:-}"; shift ;;
+        --help|-h)
+            echo "Usage: sudo $0 [--dry-run] [--skip-apt] [--category <people|phone|email|username|geo|web|framework|metadata>]"
+            exit 0 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+    shift
 done
 
-BASE_DIR="$(pwd)"
-LOG_DIR="$BASE_DIR/logs"
-TOOLS_DIR="$HOME/osint-tools"
-TIMESTAMP="$(date +%F_%T)"
-LOG_FILE="$LOG_DIR/install_$TIMESTAMP.log"
+# ── Helpers ───────────────────────────────────────────────────────────────────
+log()     { echo -e "$(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE"; }
+info()    { log "${CYAN}[*]${RESET} $*"; }
+success() { log "${GREEN}[+]${RESET} $*"; }
+warn()    { log "${YELLOW}[!]${RESET} $*"; }
+error()   { log "${RED}[-]${RESET} $*"; }
+header()  { echo -e "\n${BOLD}${BLUE}══════════════════════════════════════════${RESET}"; \
+            echo -e "${BOLD}${BLUE}  $*${RESET}"; \
+            echo -e "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"; }
+banner()  {
+    clear
+    echo -e "${BOLD}${CYAN}"
+    cat <<'EOF'
+  ██████╗ ███████╗██╗███╗   ██╗████████╗
+ ██╔═══██╗██╔════╝██║████╗  ██║╚══██╔══╝
+ ██║   ██║███████╗██║██╔██╗ ██║   ██║
+ ██║   ██║╚════██║██║██║╚██╗██║   ██║
+ ╚██████╔╝███████║██║██║ ╚████║   ██║
+  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝   ╚═╝
+   Kali Linux Installer — People-First
+EOF
+    echo -e "${RESET}"
+}
 
-mkdir -p "$LOG_DIR"
-mkdir -p "$TOOLS_DIR"
-exec > >(tee -a "$LOG_FILE") 2>&1
+check_root() {
+    [[ $EUID -eq 0 ]] || { error "Run as root: sudo bash $0"; exit 1; }
+}
 
-echo "INSTALL STARTED: $TIMESTAMP"
-echo "Mode: $MODE"
-if $USE_VENV; then
-  echo "Using virtualenv mode"
-else
-  echo "System-wide pip install (using --break-system-packages)"
-fi
+check_kali() {
+    grep -qi kali /etc/os-release 2>/dev/null || warn "Not Kali Linux — some apt packages may be unavailable."
+}
 
-trap 'rc=$?; echo "INSTALL FAILED with code $rc"; echo "See log: $LOG_FILE"; exit $rc' ERR
+check_internet() {
+    info "Checking internet connectivity..."
+    curl -s --max-time 5 https://github.com >/dev/null 2>&1 || { error "No internet access. Aborting."; exit 1; }
+}
 
-if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update -y
-  sudo apt-get install -y git curl wget build-essential python3 python3-venv python3-dev python3-pip \
-    libssl-dev libffi-dev libxml2-dev libxslt1-dev zlib1g-dev libjpeg-dev jq unzip
-fi
+# ── Track result ──────────────────────────────────────────────────────────────
+record() {
+    local name="$1" status="$2"
+    RESULTS["$name"]="$status"
+    ((TOTAL++))
+    case "$status" in
+        ok)   ((OK++));   success "$name installed successfully." ;;
+        fail) ((FAIL++)); error   "$name FAILED — check $LOG_FILE" ;;
+        skip) ((SKIP++)); warn    "$name skipped (already installed)." ;;
+    esac
+}
 
-if $USE_VENV; then
-  VENV_DIR="$BASE_DIR/.venv_osint"
-  rm -rf "$VENV_DIR"
-  python3 -m venv "$VENV_DIR"
-  source "$VENV_DIR/bin/activate"
-  PYEXEC="$VENV_DIR/bin/python"
-  PIP="$VENV_DIR/bin/pip"
-  "$PYEXEC" -m pip install --upgrade pip
-else
-  PYEXEC="python3"
-  PIP="sudo python3 -m pip"
-  "$PYEXEC" -m pip install --upgrade pip --break-system-packages
-fi
-
-echo "Installing Python packages from requirements.txt"
-if $USE_VENV; then
-  "$PIP" install -r requirements.txt || true
-else
-  $PIP install --break-system-packages -r requirements.txt || true
-fi
-
-cd "$TOOLS_DIR"
-
-repos=(
-"https://github.com/sherlock-project/sherlock.git"
-"https://github.com/soxoj/maigret.git"
-"https://github.com/megadose/holehe.git"
-"https://github.com/twintproject/twint.git"
-"https://github.com/Ice3man543/sointgram.git"
-"https://github.com/xtekky/toutatis.git"
-"https://github.com/xtekky/xeuledoc.git"
-"https://github.com/smicallef/spiderfoot.git"
-"https://github.com/laramies/theHarvester.git"
-"https://github.com/s0md3v/Photon.git"
-"https://github.com/elceef/dnstwist.git"
-"https://github.com/aboul3la/Sublist3r.git"
-"https://github.com/trufflesecurity/truffleHog.git"
-"https://github.com/i3visio/osrframework.git"
-"https://github.com/urbanadventurer/urlcrazy.git"
-"https://github.com/blechschmidt/massdns.git"
-"https://github.com/philpep/testssl.sh.git"
-"https://github.com/danielmiessler/SecLists.git"
-"https://github.com/laramies/metagoofil.git"
-"https://github.com/zricethezav/gitleaks.git"
-"https://github.com/s0md3v/social-analyzer.git"
-"https://github.com/tomnomnom/waybackurls.git"
-"https://github.com/tomnomnom/gau.git"
-"https://github.com/projectdiscovery/subfinder.git"
-"https://github.com/OWASP/Amass.git"
-"https://github.com/tomnomnom/httprobe.git"
-"https://github.com/ChrisTruncer/EyeWitness.git"
-"https://github.com/sullo/nikto.git"
-"https://github.com/robertdavidgraham/masscan.git"
-"https://github.com/sqlmapproject/sqlmap.git"
-"https://github.com/1N3/Sn1per.git"
-"https://github.com/sundowndev/PhoneInfoga.git"
-"https://github.com/sundowndev/ReconDog.git"
-"https://github.com/byt3bl33d3r/CrackMapExec.git"
-"https://github.com/projectdiscovery/nuclei.git"
-"https://github.com/projectdiscovery/nuclei-templates.git"
-"https://github.com/projectdiscovery/httpx.git"
-"https://github.com/projectdiscovery/naabu.git"
-"https://github.com/michenriksen/aquatone.git"
-"https://github.com/0xsha/OSINTgram.git"
-"https://github.com/instaloader/instaloader.git"
-"https://github.com/maurosoria/dirsearch.git"
-"https://github.com/urlscan/urlscan-cli.git"
-"https://github.com/opsdisk/whatweb.git"
-"https://github.com/arkadiyt/bulk_extractor.git"
-"https://github.com/SEKOIA-IO/threat-intel-collector.git"
-"https://github.com/blacktop/ios-deploy.git"
-"https://github.com/marklodato/awesome-ctf.git"
-"https://github.com/aidansteele/osint-workbench.git"
-"https://github.com/larvalabs/rolling-cuckoo.git"
-"https://github.com/dxa4481/truffleHog.git"
-"https://github.com/harshjv/oneforall.git"
-"https://github.com/blechschmidt/OWASP-Nettacker.git"
-"https://github.com/urbanadventurer/UDR.git"
-)
-
-count=0
-for repo in "${repos[@]}"; do
-  name="$(basename "$repo" .git)"
-  if [ -d "$name" ]; then
-    echo "Updating $name"
-    cd "$name"
-    git pull --rebase || true
-    cd ..
-  else
-    echo "Cloning $name"
-    git clone "$repo" || echo "Clone failed for $name"
-  fi
-  count=$((count+1))
-done
-
-echo "Cloned $count repos (attempted)."
-
-for d in "$TOOLS_DIR"/*; do
-  if [ -d "$d" ]; then
-    if [ -f "$d/requirements.txt" ]; then
-      echo "Installing requirements for $(basename "$d")"
-      if $USE_VENV; then
-        "$PIP" install -r "$d/requirements.txt" || true
-      else
-        $PIP install --break-system-packages -r "$d/requirements.txt" || true
-      fi
+# ── Installation primitives ───────────────────────────────────────────────────
+run_cmd() {
+    if $DRY_RUN; then
+        info "[DRY-RUN] $*"
+        return 0
     fi
-    if [ -f "$d/setup.py" ]; then
-      echo "Running pip install . for $(basename "$d")"
-      if $USE_VENV; then
-        (cd "$d" && "$PIP" install .) || true
-      else
-        (cd "$d" && $PIP install --break-system-packages .) || true
-      fi
+    eval "$@" >> "$LOG_FILE" 2>&1
+}
+
+apt_install() {
+    local pkg="$1" name="${2:-$1}"
+    $SKIP_APT && { record "$name" skip; return; }
+    if dpkg -s "$pkg" &>/dev/null; then
+        record "$name" skip
+    else
+        info "apt: installing $name..."
+        run_cmd "DEBIAN_FRONTEND=noninteractive apt-get install -y $pkg" \
+            && record "$name" ok || record "$name" fail
     fi
-  fi
+}
+
+pip_install() {
+    local pkg="$1" name="${2:-$1}" venv="${3:-}"
+    local pip_bin="pip3"
+    [[ -n "$venv" && -d "${VENV_BASE}/${venv}/bin" ]] && pip_bin="${VENV_BASE}/${venv}/bin/pip"
+
+    if $DRY_RUN; then record "$name" ok; return; fi
+
+    if $pip_bin show "$pkg" &>/dev/null 2>&1; then
+        record "$name" skip
+    else
+        info "pip: installing $name..."
+        run_cmd "$pip_bin install --quiet $pkg" \
+            && record "$name" ok || record "$name" fail
+    fi
+}
+
+make_venv() {
+    local name="$1"
+    local vdir="${VENV_BASE}/${name}"
+    $DRY_RUN && return
+    [[ -d "$vdir" ]] && return
+    info "Creating venv: $name"
+    python3 -m venv "$vdir" >> "$LOG_FILE" 2>&1 || warn "Could not create venv $name"
+}
+
+github_clone() {
+    # github_clone <category> <tool-name> <repo-url> [pip-requirements] [post-install-cmd]
+    local cat="$1" name="$2" repo="$3" req="${4:-}" post="${5:-}"
+    local dest="${INSTALL_BASE}/${cat}/${name}"
+
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "$cat" ]] && return
+
+    if [[ -d "$dest/.git" ]]; then
+        record "$name" skip; return
+    fi
+
+    info "git: cloning $name..."
+    if $DRY_RUN; then record "$name" ok; return; fi
+
+    mkdir -p "${INSTALL_BASE}/${cat}"
+    git clone --depth 1 "$repo" "$dest" >> "$LOG_FILE" 2>&1 || { record "$name" fail; return; }
+
+    if [[ -n "$req" && -f "${dest}/${req}" ]]; then
+        make_venv "$name"
+        "${VENV_BASE}/${name}/bin/pip" install --quiet -r "${dest}/${req}" >> "$LOG_FILE" 2>&1 \
+            || warn "$name: requirements install had errors"
+    fi
+
+    if [[ -n "$post" ]]; then
+        pushd "$dest" >/dev/null
+        eval "$post" >> "$LOG_FILE" 2>&1 || warn "$name: post-install step had errors"
+        popd >/dev/null
+    fi
+
+    make_launcher "$name" "$dest"
+    record "$name" ok
+}
+
+make_launcher() {
+    # Creates a /usr/local/bin wrapper that activates the venv if one exists
+    local name="$1" dest="$2"
+    local venv="${VENV_BASE}/${name}"
+    local launcher="/usr/local/bin/${name,,}"
+    $DRY_RUN && return
+
+    local python_bin
+    [[ -f "${venv}/bin/python3" ]] && python_bin="${venv}/bin/python3" || python_bin="$(which python3)"
+
+    # Find entry point
+    local entry=""
+    for f in "${dest}/main.py" "${dest}/${name,,}.py" "${dest}/app.py" "${dest}/run.py"; do
+        [[ -f "$f" ]] && entry="$f" && break
+    done
+
+    [[ -z "$entry" ]] && return  # no obvious entry point; skip launcher
+
+    cat > "$launcher" <<EOF
+#!/usr/bin/env bash
+cd "${dest}"
+exec "${python_bin}" "${entry}" "\$@"
+EOF
+    chmod +x "$launcher"
+}
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+setup_dirs() {
+    info "Creating directory structure under ${INSTALL_BASE}..."
+    $DRY_RUN && return
+    mkdir -p "${VENV_BASE}"
+    for cat in people phone email username geo web framework metadata social; do
+        mkdir -p "${INSTALL_BASE}/${cat}"
+    done
+    touch "$LOG_FILE"
+    chmod 600 "$LOG_FILE"
+}
+
+apt_update() {
+    $SKIP_APT && return
+    info "Updating apt cache..."
+    run_cmd "apt-get update -qq"
+}
+
+install_base_deps() {
+    $SKIP_APT && return
+    header "Base Dependencies"
+    local deps=(python3 python3-pip python3-venv python3-dev git curl wget \
+                libssl-dev libffi-dev build-essential libxml2-dev libxslt1-dev \
+                zlib1g-dev libjpeg-dev jq tor proxychains4 golang-go ruby ruby-dev)
+    run_cmd "DEBIAN_FRONTEND=noninteractive apt-get install -y ${deps[*]}"
+    run_cmd "pip3 install --quiet --upgrade pip setuptools wheel"
+}
+
+# =============================================================================
+#  CATEGORY: People OSINT (General)
+# =============================================================================
+install_people() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "people" ]] && return
+    header "People OSINT (General)"
+
+    # Kali apt
+    apt_install "spiderfoot"          "SpiderFoot"
+    apt_install "recon-ng"            "Recon-ng"
+    apt_install "maltego"             "Maltego"
+    apt_install "osrframework"        "OSRFramework"
+
+    # pip global
+    pip_install "socialscan"          "SocialScan"
+    pip_install "datasploit"          "DataSploit"
+
+    # GitHub
+    github_clone people "Profil3r" \
+        "https://github.com/Greyjedix/Profil3r" \
+        "requirements.txt"
+
+    github_clone people "OSINT-SPY" \
+        "https://github.com/SharadKumar97/OSINT-SPY" \
+        "requirements.txt"
+
+    github_clone people "Moriarty-Project" \
+        "https://github.com/AzizKpln/Moriarty-Project" \
+        "requirements.txt"
+
+    github_clone people "Social-Analyzer" \
+        "https://github.com/qeeqbox/social-analyzer" \
+        "requirements.txt"
+
+    github_clone people "Lampyre" \
+        "https://github.com/MichaelBonny/lampyre-osint-scripts" \
+        ""
+
+    github_clone people "Sn0int" \
+        "https://github.com/kpcyrd/sn0int" \
+        "" \
+        "cargo build --release 2>/dev/null || true"
+
+    github_clone people "Orbit" \
+        "https://github.com/orbitalsquad/orbit" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: Username / Handle OSINT
+# =============================================================================
+install_username() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "username" ]] && return
+    header "Username / Handle OSINT"
+
+    apt_install "sherlock"  "Sherlock"
+
+    pip_install "maigret"   "Maigret"
+    pip_install "nexfil"    "Nexfil"
+
+    github_clone username "WhatsMyName" \
+        "https://github.com/webbreacher/whats-my-name" \
+        "requirements.txt"
+
+    github_clone username "Blackbird" \
+        "https://github.com/p1ngul1n0/blackbird" \
+        "requirements.txt"
+
+    github_clone username "UserFinder" \
+        "https://github.com/mishakorzik/UserFinder" \
+        "requirements.txt"
+
+    github_clone username "Sherlock-Project-Extended" \
+        "https://github.com/sherlock-project/sherlock" \
+        "requirements.txt" \
+        "pip install -e . --quiet"
+
+    github_clone username "Recon-User" \
+        "https://github.com/rezaaksa/recon-user" \
+        "requirements.txt"
+
+    github_clone username "Namechk" \
+        "https://github.com/HA71/Namechk" \
+        "requirements.txt"
+
+    github_clone username "Marple" \
+        "https://github.com/d0nk/marple" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: Email OSINT
+# =============================================================================
+install_email() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "email" ]] && return
+    header "Email OSINT"
+
+    apt_install "theharvester"  "theHarvester"
+
+    pip_install "holehe"   "Holehe"
+    pip_install "h8mail"   "h8mail"
+
+    github_clone email "GHunt" \
+        "https://github.com/mxrch/GHunt" \
+        "requirements.txt"
+
+    github_clone email "Infoga" \
+        "https://github.com/m4ll0k/Infoga" \
+        "requirements.txt"
+
+    github_clone email "EmailHarvester" \
+        "https://github.com/maldevel/EmailHarvester" \
+        "requirements.txt"
+
+    github_clone email "Buster" \
+        "https://github.com/sham00n/buster" \
+        "requirements.txt"
+
+    github_clone email "email2phonenumber" \
+        "https://github.com/martinvigo/email2phonenumber" \
+        "requirements.txt"
+
+    github_clone email "H8mail-Extended" \
+        "https://github.com/khast3x/h8mail" \
+        "requirements.txt" \
+        "pip install -e . --quiet"
+
+    github_clone email "EMAGNET" \
+        "https://github.com/wuseman/EMAGNET" \
+        ""
+
+    github_clone email "Mosint" \
+        "https://github.com/alpkeskin/mosint" \
+        "" \
+        "go build -o mosint . 2>/dev/null || true"
+}
+
+# =============================================================================
+#  CATEGORY: Phone Number OSINT
+# =============================================================================
+install_phone() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "phone" ]] && return
+    header "Phone Number OSINT"
+
+    apt_install "phoneinfoga"  "PhoneInfoga"
+
+    pip_install "ignorant"  "Ignorant"
+
+    github_clone phone "PhoneInfoga-Extended" \
+        "https://github.com/sundowndev/phoneinfoga" \
+        "" \
+        "go build -o phoneinfoga . 2>/dev/null || true"
+
+    github_clone phone "OSINT-Phone" \
+        "https://github.com/HunxByts/OsintPhoneNumber" \
+        "requirements.txt"
+
+    github_clone phone "Callerspy" \
+        "https://github.com/PopeyedPete/CallerSpy" \
+        "requirements.txt"
+
+    github_clone phone "Moriarty-Phone" \
+        "https://github.com/iamraphson/moriarty-phone" \
+        "requirements.txt"
+
+    github_clone phone "Numspy" \
+        "https://github.com/ibnaleem/numspy" \
+        "requirements.txt"
+
+    github_clone phone "TelSearch" \
+        "https://github.com/mishakorzik/TelSearch" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: Social Media OSINT
+# =============================================================================
+install_social() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "social" ]] && return
+    header "Social Media OSINT"
+
+    apt_install  "instaloader"  "Instaloader"
+    apt_install  "tinfoleak"    "Tinfoleak"
+
+    pip_install  "snscrape"     "Snscrape"
+
+    github_clone social "Twint" \
+        "https://github.com/twintproject/twint" \
+        "requirements.txt" \
+        "pip install -e . --quiet"
+
+    github_clone social "Toutatis" \
+        "https://github.com/megadose/toutatis" \
+        "requirements.txt"
+
+    github_clone social "Instalooter" \
+        "https://github.com/althonos/InstaLooter" \
+        "" \
+        "pip install instalooter --quiet"
+
+    github_clone social "Osintgram" \
+        "https://github.com/Datalux/Osintgram" \
+        "requirements.txt"
+
+    github_clone social "Eyes" \
+        "https://github.com/N0rz3/Eyes" \
+        "requirements.txt"
+
+    github_clone social "Sterra" \
+        "https://github.com/novitae/sterraxcyl" \
+        "requirements.txt"
+
+    github_clone social "Reddit-OSINT" \
+        "https://github.com/n0toose/reddit-user-analyser" \
+        "requirements.txt"
+
+    github_clone social "Linkedin2Username" \
+        "https://github.com/initstring/linkedin2username" \
+        "requirements.txt"
+
+    github_clone social "Stweet" \
+        "https://github.com/markowanga/stweet" \
+        "requirements.txt"
+
+    github_clone social "Telegram-OSINT" \
+        "https://github.com/ItIsMeCall911/Awesome-Telegram-OSINT" \
+        ""
+
+    github_clone social "TikTok-OSINT" \
+        "https://github.com/tr33cr1me/TikTok-OSINT" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: Geolocation OSINT
+# =============================================================================
+install_geo() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "geo" ]] && return
+    header "Geolocation OSINT"
+
+    apt_install "creepy"  "Creepy"
+
+    github_clone geo "GeoSpy" \
+        "https://github.com/atiilla/geospy" \
+        "requirements.txt"
+
+    github_clone geo "Ipinfo-CLI" \
+        "https://github.com/ipinfo/cli" \
+        "" \
+        "go build -o ipinfo . 2>/dev/null || true"
+
+    github_clone geo "Carbon14" \
+        "https://github.com/Lazza/Carbon14" \
+        "requirements.txt"
+
+    github_clone geo "GeoRecon" \
+        "https://github.com/radioactivetobi/geo-recon" \
+        "requirements.txt"
+
+    github_clone geo "IVRE" \
+        "https://github.com/ivre/ivre" \
+        "" \
+        "pip install ivre --quiet"
+}
+
+# =============================================================================
+#  CATEGORY: Metadata OSINT
+# =============================================================================
+install_metadata() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "metadata" ]] && return
+    header "Metadata OSINT"
+
+    apt_install "exiftool"   "ExifTool"
+    apt_install "metagoofil" "Metagoofil"
+
+    github_clone metadata "FOCA" \
+        "https://github.com/ElevenPaths/FOCA" \
+        ""
+
+    github_clone metadata "Exifgrab" \
+        "https://github.com/Neelakandan-A/ExifGrab" \
+        "requirements.txt"
+
+    github_clone metadata "MetaFinder" \
+        "https://github.com/Josue87/MetaFinder" \
+        "requirements.txt"
+
+    github_clone metadata "PDF-OSINT" \
+        "https://github.com/0x09AL/PDF-OSINT" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: Web Recon (intentionally lighter)
+# =============================================================================
+install_web() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "web" ]] && return
+    header "Web Recon (Supplementary)"
+
+    apt_install "amass"      "Amass"
+    apt_install "sublist3r"  "Sublist3r"
+    apt_install "dnsrecon"   "DNSrecon"
+    apt_install "whois"      "Whois"
+    apt_install "nmap"       "Nmap"
+
+    pip_install "photon"  "Photon"
+
+    github_clone web "Shodan-CLI" \
+        "https://github.com/achillean/shodan-python" \
+        "" \
+        "pip install shodan --quiet"
+
+    github_clone web "Waybackpy" \
+        "https://github.com/akamhy/waybackpy" \
+        "" \
+        "pip install waybackpy --quiet"
+
+    github_clone web "URLScan-py" \
+        "https://github.com/ninoseki/uriorcise" \
+        "requirements.txt"
+}
+
+# =============================================================================
+#  CATEGORY: OSINT Frameworks / Platforms
+# =============================================================================
+install_framework() {
+    [[ -n "$FILTER_CATEGORY" && "$FILTER_CATEGORY" != "framework" ]] && return
+    header "OSINT Frameworks & Platforms"
+
+    apt_install "spiderfoot"  "SpiderFoot"
+
+    github_clone framework "OpenCTI-Client" \
+        "https://github.com/OpenCTI-Platform/client-python" \
+        "requirements.txt"
+
+    github_clone framework "IntelOwl-Client" \
+        "https://github.com/intelowlproject/pyintelowl" \
+        "" \
+        "pip install pyintelowl --quiet"
+
+    github_clone framework "OSINTer" \
+        "https://github.com/OSINTer-Platform/OSINTer" \
+        "requirements.txt"
+
+    github_clone framework "Datasploit" \
+        "https://github.com/DataSploit/datasploit" \
+        "requirements.txt"
+
+    github_clone framework "Mr.Holmes" \
+        "https://github.com/Lucksi/Mr.Holmes" \
+        "requirements.txt"
+
+    github_clone framework "OSINT-Framework-Tools" \
+        "https://github.com/lockfale/osint-framework" \
+        ""
+
+    github_clone framework "Maltego-TRX" \
+        "https://github.com/paterva/maltego-trx" \
+        "" \
+        "pip install maltego-trx --quiet"
+}
+
+# =============================================================================
+#  Post-install: PATH & summary
+# =============================================================================
+setup_path() {
+    $DRY_RUN && return
+    local profile="/etc/profile.d/osint.sh"
+    cat > "$profile" <<EOF
+# OSINT tools PATH additions
+export PATH="\$PATH:${INSTALL_BASE}/bin"
+for _venv in ${VENV_BASE}/*/bin; do
+    [[ -d "\$_venv" ]] && export PATH="\$PATH:\$_venv"
 done
+EOF
+    chmod +x "$profile"
+    info "PATH profile written to $profile — re-login or: source $profile"
+}
 
-echo "Post-install checks"
-command -v git >/dev/null && echo "git OK"
+print_summary() {
+    local width=46
+    echo
+    echo -e "${BOLD}${BLUE}╔$(printf '═%.0s' $(seq 1 $width))╗${RESET}"
+    printf "${BOLD}${BLUE}║${RESET}  %-*s${BOLD}${BLUE}║${RESET}\n" $((width-2)) "INSTALLATION SUMMARY"
+    echo -e "${BOLD}${BLUE}╠$(printf '═%.0s' $(seq 1 $width))╣${RESET}"
+    printf "${BOLD}${BLUE}║${RESET}  %-20s %s %*s${BOLD}${BLUE}║${RESET}\n" "Total tools:" "$TOTAL" $((width-24)) ""
+    printf "${BOLD}${BLUE}║${RESET}  ${GREEN}%-20s %s${RESET}%*s${BOLD}${BLUE}║${RESET}\n" "Installed OK:" "$OK" $((width-24)) ""
+    printf "${BOLD}${BLUE}║${RESET}  ${YELLOW}%-20s %s${RESET}%*s${BOLD}${BLUE}║${RESET}\n" "Skipped:" "$SKIP" $((width-24)) ""
+    printf "${BOLD}${BLUE}║${RESET}  ${RED}%-20s %s${RESET}%*s${BOLD}${BLUE}║${RESET}\n" "Failed:" "$FAIL" $((width-24)) ""
+    echo -e "${BOLD}${BLUE}╠$(printf '═%.0s' $(seq 1 $width))╣${RESET}"
+    printf "${BOLD}${BLUE}║${RESET}  %-*s${BOLD}${BLUE}║${RESET}\n" $((width-2)) "Install dir : ${INSTALL_BASE}"
+    printf "${BOLD}${BLUE}║${RESET}  %-*s${BOLD}${BLUE}║${RESET}\n" $((width-2)) "Log file    : ${LOG_FILE}"
+    echo -e "${BOLD}${BLUE}╚$(printf '═%.0s' $(seq 1 $width))╝${RESET}"
 
-echo "INSTALL FINISHED: $(date +%F_%T)"
-echo "Logs: $LOG_FILE"
-if $USE_VENV; then
-  echo "Virtualenv: $VENV_DIR"
-fi
+    if [[ $FAIL -gt 0 ]]; then
+        echo
+        warn "Failed tools:"
+        for tool in "${!RESULTS[@]}"; do
+            [[ "${RESULTS[$tool]}" == "fail" ]] && echo -e "  ${RED}✗${RESET} $tool"
+        done
+    fi
+}
+
+# =============================================================================
+#  MAIN
+# =============================================================================
+main() {
+    banner
+    check_root
+    check_kali
+    check_internet
+    setup_dirs
+    apt_update
+    install_base_deps
+
+    if [[ -z "$FILTER_CATEGORY" ]]; then
+        install_people
+        install_username
+        install_email
+        install_phone
+        install_social
+        install_geo
+        install_metadata
+        install_web
+        install_framework
+    else
+        case "$FILTER_CATEGORY" in
+            people)    install_people ;;
+            username)  install_username ;;
+            email)     install_email ;;
+            phone)     install_phone ;;
+            social)    install_social ;;
+            geo)       install_geo ;;
+            metadata)  install_metadata ;;
+            web)       install_web ;;
+            framework) install_framework ;;
+            *) error "Unknown category: $FILTER_CATEGORY"; exit 1 ;;
+        esac
+    fi
+
+    setup_path
+    print_summary
+}
+
+main "$@"
